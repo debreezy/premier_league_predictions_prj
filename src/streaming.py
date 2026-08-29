@@ -1,8 +1,10 @@
 import os
+import pandas as pd
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, TimestampType, DoubleType, IntegerType
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType, DoubleType, IntegerType, DateType
 from pyspark.sql import functions as F
 
+from predict import load_model_and_schedule, normalize_team_names, remaining_fixtures, predict_title_probabilities
 
 
 spark = (
@@ -17,12 +19,19 @@ schema = StructType([
     StructField("HomeGoals", IntegerType(), True),
     StructField("AwayGoals", IntegerType(), True),
     StructField("Result", StringType(), True),
+    StructField("MatchDate", DateType(), True),
 ])
 
 stream_df = spark.readStream.schema(schema).option("recursiveFileLookup","true").csv("./data/streaming/")
 
-output_dir = "./data/output/standings"
-os.makedirs(output_dir, exist_ok=True)
+standings_csv_dir = "./data/output/standings"
+title_race_csv_dir = "./data/output/title_race"
+checkpoint_dir = "./checkpoints/streaming"
+os.makedirs(standings_csv_dir, exist_ok=True)
+os.makedirs(title_race_csv_dir, exist_ok=True)
+os.makedirs(checkpoint_dir, exist_ok=True)
+
+train_df, model, season_fixtures = load_model_and_schedule()
 
 matches_per_week = 10
 match_counter = {"total": 0, "last_printed_week": 0}
@@ -79,27 +88,53 @@ def process_batch(batch_df, batch_id):
     if accumulated_matches_df is None:
         accumulated_matches_df = batch_df
     else:
-        accumulated_matches_df = accumulated_matches_df.unionByName(batch_df).cache()
+        accumulated_matches_df = accumulated_matches_df.unionByName(batch_df)
+    accumulated_matches_df = accumulated_matches_df.cache()
 
     match_counter["total"] += batch_count
-    current_week = match_counter["total"] // matches_per_week
+    new_total_weeks = match_counter["total"] // matches_per_week
 
-    if current_week > match_counter["last_printed_week"]:
+    for current_week in range(match_counter["last_printed_week"] + 1, new_total_weeks + 1):
         match_counter["last_printed_week"] = current_week
 
-        standings_df = compute_standings(accumulated_matches_df)
+        matches_through_week = (
+            accumulated_matches_df
+            .orderBy("MatchDate")
+            .limit(current_week * matches_per_week)
+            .cache()
+        )
 
-        output_path = os.path.join(output_dir, f"matchweek{current_week}_standings.csv")
-        standings_df.toPandas().to_csv(output_path, index=False)
+        standings_df = compute_standings(matches_through_week)
+        standings_csv_path = os.path.join(standings_csv_dir, f"matchweek{current_week}_standings.csv")
+        standings_df.toPandas().to_csv(standings_csv_path, index=False)
 
-        batch_df.write.mode("overwrite").parquet(f"./data/batches/batch_{batch_id}.parquet")
+        latest_match_date = matches_through_week.agg(F.max("MatchDate")).first()[0]
+        print(f"=== Matchweek {current_week} complete ({current_week * matches_per_week} matches processed, through {latest_match_date}) ===")
+        print(f"Standings written to {standings_csv_path}")
 
-        print(f"=== Matchweek {current_week} complete ({match_counter['total']} matches processed) ===")
-        print(f"Standings written to {output_path}")
+        played_matches = matches_through_week.select(
+            "HomeTeam", "AwayTeam", "HomeGoals", "AwayGoals", "Result", "MatchDate"
+        ).toPandas()
+        played_matches["MatchDate"] = pd.to_datetime(played_matches["MatchDate"])
+        played_matches = normalize_team_names(played_matches)
+
+        title_probabilities = predict_title_probabilities(
+            played_matches, remaining_fixtures(season_fixtures, played_matches), train_df, model
+        )
+        title_probabilities["Matchweek"] = current_week
+
+        title_race_csv_path = os.path.join(title_race_csv_dir, f"matchweek{current_week}_title_probabilities.csv")
+        title_probabilities.to_csv(title_race_csv_path, index=False)
+
+        print(f"Title probabilities written to {title_race_csv_path}")
+        print(title_probabilities.to_string(index=False))
+
+        matches_through_week.unpersist()
 
 counter_query = (stream_df.writeStream
                  .foreachBatch(process_batch)
                  .outputMode("update")
+                 .option("checkpointLocation", checkpoint_dir)
                  .start())
 
 counter_query.awaitTermination()

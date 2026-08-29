@@ -3,3 +3,6 @@ pyspark
 path
 pandas
 requests
+scikit-learn
+numpy
+python-dotenv

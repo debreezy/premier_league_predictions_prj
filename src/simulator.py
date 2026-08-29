@@ -26,7 +26,8 @@ with open(input_path, mode="r", newline="", encoding="utf-8") as in_file:
                 row["AwayTeam"],
                 row["HomeGoals"],
                 row["AwayGoals"],
-                row["Result"]
+                row["Result"],
+                row["MatchDate"]
             ])
 
         print(f"Wrote {output_path}")

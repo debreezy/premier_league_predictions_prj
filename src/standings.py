@@ -10,6 +10,7 @@ df = spark.read \
 
 hometeams_df = (df.select(
                     F.col("HomeTeam").alias("Team"),
+                    F.col("MatchDate"),
                     F.col("HomeGoals").alias("GoalsFor"),
                     F.col("AwayGoals").alias("GoalsAgainst"),
                     F.when(F.col("Result") == "H", 3)
@@ -23,6 +24,7 @@ hometeams_df = (df.select(
 
 awayteams_df = (df.select(
                     F.col("AwayTeam").alias("Team"),
+                    F.col("MatchDate"),
                     F.col("AwayGoals").alias("GoalsFor"),
                     F.col("HomeGoals").alias("GoalsAgainst"),
                     F.when(F.col("Result") == "A", 3)
@@ -46,10 +48,11 @@ league_table_df = (hometeams_df.unionByName(awayteams_df)
                        F.sum("Wins").alias("Wins"),
                        F.sum("Draws").alias("Draws"),
                        F.sum("Losses").alias("Losses"),
-                       F.sum("MatchCount").alias("MatchCount")
+                       F.sum("MatchCount").alias("MatchCount"),
+                       F.max("MatchDate").alias("LastMatchDate")
                    )
                    .withColumn("GoalDifference", F.col("GoalsFor") - F.col("GoalsAgainst"))
-                   .select("Team","MatchCount","Wins","Draws", "Losses", "GoalsFor", "GoalsAgainst", "GoalDifference", "Points")
+                   .select("Team","MatchCount","Wins","Draws", "Losses", "GoalsFor", "GoalsAgainst", "GoalDifference", "Points", "LastMatchDate")
                    .orderBy(F.desc("Points"), F.desc("GoalDifference")))
 
 league_table_df.show()
