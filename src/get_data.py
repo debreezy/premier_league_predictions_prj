@@ -51,11 +51,6 @@ def format_completed_matches(matches):
 
 
 def write_current_fixtures(matches, fixtures_file=FIXTURES_FILE):
-    """Persist the complete fixture list returned by the PL endpoint.
-
-    The streaming job must use this file for its title simulation; a fixture
-    list from a different season silently mixes two sets of clubs.
-    """
     fixtures = [
         {
             "HomeTeam": match["homeTeam"]["name"],
